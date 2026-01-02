@@ -1,4 +1,6 @@
 .vscode/
+settings.json
+env/
 data/
 env7/
 logs/
