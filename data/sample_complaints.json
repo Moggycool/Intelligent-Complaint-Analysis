@@ -1,0 +1,107 @@
+[
+  {
+    "complaint_narrative": "I have been trying to dispute fraudulent charges on my credit card for over 3 months. The bank keeps telling me they are investigating, but I never receive any updates. These unauthorized charges total over $2,500 and it's affecting my credit score. I've called customer service at least 10 times and each representative gives me different information. This is unacceptable service and I need these charges removed immediately.",
+    "product": "Credit Card",
+    "company": "ABC Bank",
+    "state": "CA",
+    "issue": "Fraudulent charges"
+  },
+  {
+    "complaint_narrative": "Applied for a mortgage 6 weeks ago and still haven't received a decision. The loan officer doesn't return my calls and I'm about to lose the house I wanted to buy. I submitted all required documents on time but the process is taking way too long. Other lenders can approve mortgages in 2-3 weeks but this bank is extremely slow. Very frustrated with the lack of communication and delays.",
+    "product": "Mortgage",
+    "company": "XYZ Lending",
+    "state": "TX",
+    "issue": "Application processing delays"
+  },
+  {
+    "complaint_narrative": "My credit card was declined at a restaurant even though I have a $10,000 credit limit and only $500 in charges. This was embarrassing and the customer service representative was rude when I called to ask why. They said there was suspicious activity but I was just using my card normally. The fraud detection system is too sensitive and causes legitimate transactions to be declined. Need better customer service training.",
+    "product": "Credit Card",
+    "company": "ABC Bank",
+    "state": "NY",
+    "issue": "Card declined"
+  },
+  {
+    "complaint_narrative": "Opened a checking account last month and was promised a $200 bonus for direct deposit. I set up my payroll direct deposit but still haven't received the bonus after 45 days. Customer service says I don't qualify but that's not what the banker told me when I opened the account. Feel like I was misled with false advertising. Want my promised bonus.",
+    "product": "Checking Account",
+    "company": "Community Bank",
+    "state": "FL",
+    "issue": "Promotional bonus not received"
+  },
+  {
+    "complaint_narrative": "I've been paying my mortgage on time for 15 years but was denied for a refinance without clear explanation. My credit score is 780 and I have significant equity in my home. The underwriter cited vague reasons about debt-to-income ratio but my financial situation hasn't changed. This seems discriminatory and unfair. I deserve a better explanation for the denial.",
+    "product": "Mortgage",
+    "company": "XYZ Lending",
+    "state": "WA",
+    "issue": "Refinance denial"
+  },
+  {
+    "complaint_narrative": "Attempted to withdraw $3,000 from my savings account and was told there's a hold on my account. No one informed me about any issues and my money is trapped. I need this money for an emergency medical expense. The bank says they need to verify the source of funds even though I've had this account for 5 years. This is my money and I should be able to access it immediately.",
+    "product": "Savings Account",
+    "company": "National Trust",
+    "state": "IL",
+    "issue": "Account hold/frozen"
+  },
+  {
+    "complaint_narrative": "Credit card company raised my interest rate from 15% to 24% without warning. I've never missed a payment and my credit score actually improved. When I called to ask why, they said it's based on market conditions but this seems like price gouging. I'm paying an extra $150 per month in interest now. Looking to transfer my balance to a different card with better terms.",
+    "product": "Credit Card",
+    "company": "Mega Card Services",
+    "state": "CA",
+    "issue": "Interest rate increase"
+  },
+  {
+    "complaint_narrative": "Applied for a personal loan to consolidate debt but was rejected despite having good credit. The rejection letter didn't explain the specific reasons. I called and they mentioned something about too many recent inquiries, but I only applied for this one loan. The process is not transparent and I feel like I'm being unfairly denied access to credit.",
+    "product": "Personal Loan",
+    "company": "Quick Loans Inc",
+    "state": "OH",
+    "issue": "Loan application denial"
+  },
+  {
+    "complaint_narrative": "My checking account was charged $35 overdraft fee even though I opted out of overdraft protection. The bank allowed a transaction to go through that overdrew my account by $5, then charged me $35. This is predatory and they should have just declined the transaction. I've been charged 3 overdraft fees this month totaling $105. The fees are excessive and unfair.",
+    "product": "Checking Account",
+    "company": "Community Bank",
+    "state": "GA",
+    "issue": "Overdraft fees"
+  },
+  {
+    "complaint_narrative": "Credit card rewards points disappeared from my account without explanation. I had accumulated 50,000 points worth about $500 in travel rewards. Customer service claims the points expired but I never received any notification about expiration. The terms and conditions are buried in fine print and they should have sent a reminder. Want my points restored.",
+    "product": "Credit Card",
+    "company": "Travel Rewards Bank",
+    "state": "MA",
+    "issue": "Rewards points issue"
+  },
+  {
+    "complaint_narrative": "Mortgage payment keeps getting lost even though I set up automatic payments. Have been charged 3 late fees in the past 6 months despite the money being withdrawn from my account on time. Their payment processing system is broken and customer service just apologizes but doesn't fix the issue. Need the late fees refunded and the system fixed.",
+    "product": "Mortgage",
+    "company": "Home Loans USA",
+    "state": "AZ",
+    "issue": "Payment processing errors"
+  },
+  {
+    "complaint_narrative": "Savings account interest rate was advertised as 2.5% APY but I'm only earning 0.5%. When I questioned this, they said the 2.5% rate only applies if you maintain a $25,000 minimum balance. This wasn't clearly stated in the advertisement. Feels like bait and switch tactics. Want the advertised rate or I'll move my money elsewhere.",
+    "product": "Savings Account",
+    "company": "High Yield Savings Co",
+    "state": "NJ",
+    "issue": "Misleading interest rates"
+  },
+  {
+    "complaint_narrative": "Applied for a student loan and the approval process took 4 months. By the time I got approved, the semester had already started and I missed enrollment. The financial aid office kept asking for the same documents multiple times. This delayed my education and caused significant stress. The loan process should be faster for time-sensitive situations.",
+    "product": "Student Loan",
+    "company": "Education Finance Corp",
+    "state": "MI",
+    "issue": "Slow loan approval"
+  },
+  {
+    "complaint_narrative": "My debit card information was stolen and used for unauthorized purchases. The bank is taking over a month to investigate and hasn't returned my money. I filed a police report and provided all evidence but they keep saying they need more time. Meanwhile, I can't pay my bills because $1,200 is missing from my account. Need faster resolution.",
+    "product": "Checking Account",
+    "company": "ABC Bank",
+    "state": "CO",
+    "issue": "Fraudulent debit card charges"
+  },
+  {
+    "complaint_narrative": "Credit reporting error on my credit card account showing late payments that I never made. This has dropped my credit score by 50 points. I've disputed this with the credit card company 3 times but they haven't corrected it. This is affecting my ability to get a car loan. Need this fixed immediately and reported correctly to credit bureaus.",
+    "product": "Credit Card",
+    "company": "National Credit",
+    "state": "VA",
+    "issue": "Credit reporting errors"
+  }
+]

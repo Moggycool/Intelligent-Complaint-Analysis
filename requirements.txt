@@ -1,0 +1,27 @@
+# Core RAG dependencies
+langchain>=0.1.0
+langchain-community>=0.0.13
+langchain-openai>=0.0.2
+
+# Vector stores
+faiss-cpu>=1.8.0
+chromadb>=0.4.22
+
+# Embeddings
+sentence-transformers>=2.3.1
+
+# LLM providers
+openai>=1.7.2
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Environment management
+python-dotenv>=1.0.0
+
+# CLI interface
+click>=8.1.0
+
+# Utilities
+tqdm>=4.66.0
