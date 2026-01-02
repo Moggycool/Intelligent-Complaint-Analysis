@@ -4,9 +4,9 @@ Vector store management for semantic search
 from typing import List, Dict, Optional, Any
 import pickle
 import os
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.vectorstores import FAISS, Chroma
-from langchain.docstore.document import Document
+from langchain_openai import OpenAIEmbeddings
+from langchain_community.vectorstores import FAISS, Chroma
+from langchain_core.documents import Document
 from .config import Config
 
 

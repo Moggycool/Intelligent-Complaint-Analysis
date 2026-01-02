@@ -2,10 +2,9 @@
 RAG query engine with LLM integration
 """
 from typing import List, Dict, Optional
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
-from langchain.docstore.document import Document
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import PromptTemplate
+from langchain_core.documents import Document
 from .config import Config
 from .vector_store import VectorStoreManager
 
@@ -96,13 +95,13 @@ Answer:"""
         context = self._format_context(relevant_docs)
         
         # Generate answer using LLM
-        prompt = PromptTemplate(
-            template=self.ANALYSIS_PROMPT_TEMPLATE,
-            input_variables=["question", "context"]
+        prompt_text = self.ANALYSIS_PROMPT_TEMPLATE.format(
+            question=question,
+            context=context
         )
         
-        chain = LLMChain(llm=self.llm, prompt=prompt)
-        answer = chain.run(question=question, context=context)
+        response = self.llm.invoke(prompt_text)
+        answer = response.content if hasattr(response, 'content') else str(response)
         
         return {
             'answer': answer.strip(),
@@ -149,13 +148,13 @@ Answer:"""
         combined_context = "\n".join(product_contexts)
         
         # Generate comparative answer
-        prompt = PromptTemplate(
-            template=self.COMPARISON_PROMPT_TEMPLATE,
-            input_variables=["question", "context"]
+        prompt_text = self.COMPARISON_PROMPT_TEMPLATE.format(
+            question=question,
+            context=combined_context
         )
         
-        chain = LLMChain(llm=self.llm, prompt=prompt)
-        answer = chain.run(question=question, context=combined_context)
+        response = self.llm.invoke(prompt_text)
+        answer = response.content if hasattr(response, 'content') else str(response)
         
         return {
             'answer': answer.strip(),
