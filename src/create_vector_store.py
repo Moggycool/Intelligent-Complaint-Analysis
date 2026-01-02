@@ -16,7 +16,7 @@ from typing import List, Dict
 from tqdm import tqdm
 
 # LangChain for text chunking
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # Sentence transformers for embeddings
 from sentence_transformers import SentenceTransformer
@@ -296,10 +296,14 @@ def main():
     print("="*70)
     
     # Load cleaned dataset
-    data_path = Path('../data/filtered_complaints.csv')
+    data_path = Path('data/filtered_complaints.csv')
     
     if not data_path.exists():
-        print(f"Error: {data_path} not found!")
+        # Try relative path if running from src/
+        data_path = Path('../data/filtered_complaints.csv')
+    
+    if not data_path.exists():
+        print(f"Error: filtered_complaints.csv not found!")
         print("Please run Task 1 (EDA and preprocessing) first.")
         return
     
@@ -332,7 +336,8 @@ def main():
     vector_store.create_vector_store()
     
     # Save vector store
-    vector_store.save_vector_store(output_dir='../vector_store')
+    output_dir = 'vector_store' if Path('vector_store').exists() else '../vector_store'
+    vector_store.save_vector_store(output_dir=output_dir)
     
     # Test search functionality
     print("\n" + "="*70)
