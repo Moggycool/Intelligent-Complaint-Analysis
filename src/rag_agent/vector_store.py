@@ -90,10 +90,17 @@ class VectorStoreManager:
             
         Returns:
             Loaded vector store instance
+        
+        Security Note:
+            FAISS uses pickle for serialization. Only load vector stores from
+            trusted sources. The allow_dangerous_deserialization flag is required
+            for FAISS but should only be used with verified/trusted index files.
         """
         load_path = path or Config.get_vector_store_path()
         
         if self.store_type == 'faiss':
+            # Security: Only load from expected/trusted location
+            # In production, consider adding checksum verification
             self.vector_store = FAISS.load_local(
                 load_path,
                 self.embeddings,

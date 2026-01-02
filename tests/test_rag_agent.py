@@ -109,16 +109,18 @@ class TestConfig(unittest.TestCase):
         """Test vector store path creation"""
         # Create temp directory for test
         temp_dir = tempfile.mkdtemp()
-        original_path = Config.VECTOR_STORE_PATH
+        test_path = os.path.join(temp_dir, 'test_store')
         
         try:
-            Config.VECTOR_STORE_PATH = os.path.join(temp_dir, 'test_store')
-            path = Config.get_vector_store_path(create=True)
+            # Save original config
+            from unittest.mock import patch
             
-            self.assertTrue(os.path.exists(path))
-            self.assertTrue(os.path.isdir(path))
+            with patch.object(Config, 'VECTOR_STORE_PATH', test_path):
+                path = Config.get_vector_store_path(create=True)
+                
+                self.assertTrue(os.path.exists(path))
+                self.assertTrue(os.path.isdir(path))
         finally:
-            Config.VECTOR_STORE_PATH = original_path
             shutil.rmtree(temp_dir)
 
 
