@@ -14,6 +14,16 @@ from pathlib import Path
 import warnings
 warnings.filterwarnings('ignore')
 
+# Target product keywords for filtering
+TARGET_PRODUCT_KEYWORDS = [
+    'credit card',
+    'personal loan',
+    'payday loan',
+    'savings',
+    'checking',
+    'money transfer'
+]
+
 
 def count_words(text):
     """Count words in a text string"""
@@ -140,10 +150,12 @@ def filter_data(df):
     
     print(f"\nOriginal dataset size: {len(df):,}")
     
-    # Identify matching products
+    # Identify matching products using defined keywords
     all_products = df['Product'].unique()
-    matching_products = [p for p in all_products if any(keyword in p.lower() for keyword in 
-                         ['credit card', 'personal loan', 'payday loan', 'savings', 'checking', 'money transfer'])]
+    matching_products = [
+        p for p in all_products 
+        if any(keyword in p.lower() for keyword in TARGET_PRODUCT_KEYWORDS)
+    ]
     
     print("\nMatching products found:")
     for product in matching_products:

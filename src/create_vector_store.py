@@ -14,6 +14,7 @@ from pathlib import Path
 import pickle
 from typing import List, Dict
 from tqdm import tqdm
+import os
 
 # LangChain for text chunking
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -23,6 +24,33 @@ from sentence_transformers import SentenceTransformer
 
 # FAISS for vector store
 import faiss
+
+
+def get_project_root():
+    """Get the project root directory."""
+    # Start from current file's directory
+    current = Path(__file__).resolve().parent
+    # Go up until we find the project root (contains requirements.txt)
+    while current != current.parent:
+        if (current / 'requirements.txt').exists():
+            return current
+        current = current.parent
+    # If not found, return current directory
+    return Path.cwd()
+
+
+def resolve_path(relative_path: str) -> Path:
+    """
+    Resolve a path relative to project root.
+    
+    Args:
+        relative_path: Path relative to project root (e.g., 'data/complaints.csv')
+        
+    Returns:
+        Absolute Path object
+    """
+    project_root = get_project_root()
+    return project_root / relative_path
 
 
 class ComplaintVectorStore:
@@ -213,12 +241,12 @@ class ComplaintVectorStore:
         
         print(f"FAISS index created with {self.index.ntotal} vectors")
     
-    def save_vector_store(self, output_dir: str = '../vector_store') -> None:
+    def save_vector_store(self, output_dir: str = 'vector_store') -> None:
         """
         Save the vector store and metadata to disk.
         
         Args:
-            output_dir: Directory to save vector store files
+            output_dir: Directory to save vector store files (default: 'vector_store')
         """
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
@@ -295,15 +323,11 @@ def main():
     print("Task 2: Text Chunking, Embedding, and Vector Store Indexing")
     print("="*70)
     
-    # Load cleaned dataset
-    data_path = Path('data/filtered_complaints.csv')
+    # Load cleaned dataset using project root resolution
+    data_path = resolve_path('data/filtered_complaints.csv')
     
     if not data_path.exists():
-        # Try relative path if running from src/
-        data_path = Path('../data/filtered_complaints.csv')
-    
-    if not data_path.exists():
-        print(f"Error: filtered_complaints.csv not found!")
+        print(f"Error: filtered_complaints.csv not found at {data_path}!")
         print("Please run Task 1 (EDA and preprocessing) first.")
         return
     
@@ -335,9 +359,9 @@ def main():
     # Create vector store
     vector_store.create_vector_store()
     
-    # Save vector store
-    output_dir = 'vector_store' if Path('vector_store').exists() else '../vector_store'
-    vector_store.save_vector_store(output_dir=output_dir)
+    # Save vector store using project root resolution
+    output_dir = resolve_path('vector_store')
+    vector_store.save_vector_store(output_dir=str(output_dir))
     
     # Test search functionality
     print("\n" + "="*70)
