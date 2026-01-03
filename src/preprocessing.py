@@ -7,6 +7,19 @@ import re
 from typing import List, Dict
 import pandas as pd
 
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+# Download required NLTK resources (run once)
+nltk.download('stopwords')
+nltk.download('wordnet')
+nltk.download('omw-1.4')
+
+# Initialize lemmatizer and stopwords
+lemmatizer = WordNetLemmatizer()
+stop_words = set(stopwords.words('english'))
+
+
 # -----------------------------
 # Product normalization mapping
 # -----------------------------
@@ -114,9 +127,17 @@ def filter_products_and_narratives(
 # -----------------------------
 # Text cleaning
 # -----------------------------
-def clean_narrative_text(text: str) -> str:
+def clean_narrative_text(text: str, remove_stopwords: bool = True, lemmatize: bool = True) -> str:
     """
-    Clean complaint narrative text for embedding.
+    Clean complaint narrative text for embeddings.
+
+    Steps:
+    1. Lowercase
+    2. Remove boilerplate
+    3. Remove special characters
+    4. Optional: remove stopwords
+    5. Optional: lemmatization
+    6. Collapse multiple spaces
     """
     if not isinstance(text, str):
         return ""
@@ -134,6 +155,20 @@ def clean_narrative_text(text: str) -> str:
 
     # Remove non-alphanumeric characters
     text = re.sub(r"[^a-z0-9\s]", " ", text)
+
+    # Tokenize words
+    words = text.split()
+
+    # Remove stopwords if requested
+    if remove_stopwords:
+        words = [w for w in words if w not in stop_words]
+
+    # Lemmatize if requested
+    if lemmatize:
+        words = [lemmatizer.lemmatize(w) for w in words]
+
+    # Reconstruct text
+    text = " ".join(words)
 
     # Collapse multiple spaces
     text = re.sub(r"\s+", " ", text).strip()
