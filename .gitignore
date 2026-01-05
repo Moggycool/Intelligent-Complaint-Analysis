@@ -30,3 +30,4 @@ __pycache__/
 *.7z
 *.log.*
 thumbs.db
+vector_store/
