@@ -1,6 +1,6 @@
 """End-to-end Retrieval-Augmented Generation pipeline."""
 from typing import Dict
-from .prompts import build_prompt
+from prompts import build_prompt
 
 
 class RAGPipeline:
