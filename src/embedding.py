@@ -1,6 +1,5 @@
-"""Sentence-transformer embedding model with NLTK-based text chunking."""
-from typing import List
-import numpy as np
+"""Embedding model with text chunking and metadata handling."""
+from typing import List, Dict, Optional, Any
 import nltk
 from nltk.tokenize import sent_tokenize
 from sentence_transformers import SentenceTransformer
@@ -10,46 +9,59 @@ nltk.download("punkt", quiet=True)
 
 class EmbeddingModel:
     """
-    Sentence-transformer embedding model with NLTK-based text chunking.
+    Sentence-transformer embedding model with automatic text chunking
+    and metadata handling for each chunk.
     """
 
-    def __init__(
-        self,
-        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
-        max_words: int = 150,
-    ):
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2", chunk_size: int = 5, overlap: int = 1):
+        """
+        Args:
+            model_name (str): SentenceTransformer model name
+            chunk_size (int): Number of sentences per chunk
+            overlap (int): Number of overlapping sentences between chunks
+        """
         self.model = SentenceTransformer(model_name)
-        self.max_words = max_words
+        self.chunk_size = chunk_size
+        self.overlap = overlap
 
-    def _chunk_text(self, text: str) -> List[str]:
+    def chunk_text(self, text: str) -> List[str]:
+        """
+        Splits a text into overlapping chunks based on sentences.
+
+        Args:
+            text (str): The text to chunk
+
+        Returns:
+            List[str]: List of text chunks
+        """
         sentences = sent_tokenize(text)
-        chunks, current_chunk, length = [], [], 0
-
-        for sentence in sentences:
-            words = sentence.split()
-            if length + len(words) <= self.max_words:
-                current_chunk.append(sentence)
-                length += len(words)
-            else:
-                chunks.append(" ".join(current_chunk))
-                current_chunk = [sentence]
-                length = len(words)
-
-        if current_chunk:
-            chunks.append(" ".join(current_chunk))
-
+        chunks = []
+        step = self.chunk_size - self.overlap
+        for i in range(0, len(sentences), step):
+            chunk = " ".join(sentences[i:i + self.chunk_size])
+            if chunk:
+                chunks.append(chunk)
         return chunks
 
-    def embed_texts(self, texts: List[str]) -> np.ndarray:
+    def embed_text(self, text: str, metadata: Optional[Dict[str, Any]] = None) -> List[Dict]:
         """
-        Chunk texts using NLTK, then generate embeddings.
-        """
-        all_chunks = []
-        for text in texts:
-            all_chunks.extend(self._chunk_text(text))
+        Returns embeddings for text chunks with optional metadata attached.
 
-        return self.model.encode(
-            all_chunks,
-            convert_to_numpy=True,
-            normalize_embeddings=True
-        )
+        Args:
+            text (str): The text to embed
+            metadata (Dict, optional): Additional metadata for each chunk
+
+        Returns:
+            List[Dict]: Each dict contains 'chunk', 'embedding', and 'metadata'
+        """
+        chunks = self.chunk_text(text)
+        embeddings = self.model.encode(chunks)
+        result = []
+        for i, chunk in enumerate(chunks):
+            chunk_data = {
+                "chunk": chunk,
+                "embedding": embeddings[i],
+                "metadata": metadata or {}
+            }
+            result.append(chunk_data)
+        return result
