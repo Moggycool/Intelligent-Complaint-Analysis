@@ -31,3 +31,6 @@ __pycache__/
 *.log.*
 thumbs.db
 vector_store/
+.pytest_cache/
+.ipynb_checkpoints/
+.vscode
