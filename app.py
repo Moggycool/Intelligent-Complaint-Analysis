@@ -1,3 +1,5 @@
+""" Gradio app for RAG-based intelligent complaint analysis.
+Allows users to ask questions about customer complaints and verifies answers with sources."""
 from __future__ import annotations
 
 import os
@@ -223,6 +225,7 @@ def _format_sources(chunks: List[SourceChunk]) -> str:
 # Gradio actions (tuple-history only)
 # ----------------------------
 def ask_stream(question: str, history: ChatHistory):
+    """Ask a question and stream the answer character by character."""
     question = (question or "").strip()
     history = history or []
 
@@ -251,6 +254,7 @@ def ask_stream(question: str, history: ChatHistory):
 
 
 def clear_all() -> Tuple[ChatHistory, str, str, ChatHistory]:
+    """Clear the entire conversation and sources."""
     return [], "Sources will appear here after you ask a question.", "", []
 
 
