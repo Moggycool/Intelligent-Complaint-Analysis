@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import re
 
 from src.prompts import REFUSAL, build_prompt, build_yes_no_prompt
+from src.retriever import dynamic_k
 
 
 @dataclass
@@ -23,17 +24,28 @@ class RAGPipeline:
         self.k = k
         self.max_context_chars = max_context_chars
 
-        # Aggregate decoding defaults (short + format-following)
+        # Aggregate decoding defaults (give enough room to produce 3–7 bullets)
         self.aggregate_generate_kwargs = {
-            "max_new_tokens": 120,
+            "max_new_tokens": 240,
             "num_beams": 4,
-            "length_penalty": 0.8,
+            "length_penalty": 1.0,
+            "no_repeat_ngram_size": 3,
         }
 
     def answer(self, question: str, k: Optional[int] = None, return_prompt: bool = False) -> RAGResult:
-        use_k = k or self.k
-        retrieved = self.retriever.retrieve(question, k=use_k)
+        q = (question or "").strip()
+        if not q:
+            return RAGResult(question=question, answer=REFUSAL, sources=[], prompt=None)
 
+        # Use dynamic_k for aggregate questions unless caller overrides k explicitly
+        if k is None:
+            use_k = dynamic_k(q, base_k=self.k)
+        else:
+            use_k = k
+
+        retrieved = self.retriever.retrieve(q, k=use_k)
+
+        # Build context chunks (with headers) for normal QA + yes/no evidence quoting.
         context_chunks: List[str] = []
         for i, r in enumerate(retrieved, start=1):
             text = (r.get("text") or "").strip()
@@ -41,7 +53,7 @@ class RAGPipeline:
                 continue
 
             trimmed = self._trim_text(
-                question, text, max_chars=self.max_context_chars)
+                q, text, max_chars=self.max_context_chars)
             if not trimmed:
                 continue
 
@@ -63,19 +75,19 @@ class RAGPipeline:
 
             context_chunks.append(f"{header} {trimmed}")
 
-        if self._is_yes_no_question(question):
-            prompt = build_yes_no_prompt(context_chunks, question)
+        # Route: Yes/No schema
+        if self._is_yes_no_question(q):
+            prompt = build_yes_no_prompt(context_chunks, q)
             model_text = self.generator.generate(prompt).text
-            answer = self._apply_yes_no_guards(
-                question, model_text, context_chunks)
+            answer = self._apply_yes_no_guards(q, model_text, context_chunks)
 
         else:
-            if self._is_aggregate_question(question):
-                # IMPORTANT: strip headers BEFORE prompting
+            # Route: Aggregate bullets
+            if self._is_aggregate_question(q):
+                # Strip headers BEFORE prompting to prevent the model copying metadata
                 aggregate_chunks = [self._strip_context_header(
                     ch) for ch in context_chunks]
-                prompt = self._build_aggregate_prompt(
-                    aggregate_chunks, question)
+                prompt = self._build_aggregate_prompt(aggregate_chunks, q)
 
                 raw_answer = self.generator.generate(
                     prompt,
@@ -83,16 +95,17 @@ class RAGPipeline:
                 ).text
 
                 answer = self._coerce_aggregate_bullets(
-                    raw_answer, aggregate_chunks, question)
+                    raw_answer, aggregate_chunks, q)
 
+            # Route: Free-form grounded answer
             else:
-                prompt = build_prompt(context_chunks, question)
+                prompt = build_prompt(context_chunks, q)
                 answer = self.generator.generate(prompt).text
                 if not answer.strip():
                     answer = REFUSAL
 
         return RAGResult(
-            question=question,
+            question=q,
             answer=answer,
             sources=retrieved,
             prompt=prompt if return_prompt else None,
@@ -123,6 +136,7 @@ class RAGPipeline:
             "top issues", "main issues", "typical issues", "patterns",
             "what are customers complaining", "what issues do customers",
             "what are the issues", "what problems do customers",
+            "themes", "trends",
         )
         if any(t in q for t in triggers):
             return True
@@ -133,12 +147,22 @@ class RAGPipeline:
         return False
 
     # ----------------------------
-    # Aggregate prompt + hard coercion
+    # Header stripping (FIXED)
     # ----------------------------
     def _strip_context_header(self, chunk: str) -> str:
-        # FIXED REGEX: remove "[n]" and optional "(...)" metadata at the start
-        return re.sub(r"^$\d+$(\s*$[^)]+$)?\s*", "", (chunk or "")).strip()
+        """
+        Remove leading chunk headers like:
+          [1] (complaint_id=..., product=..., score=...) <text>
+          [1] <text>
+        """
+        s = (chunk or "").strip()
+        s = re.sub(r"^$\d+$\s*", "", s)
+        s = re.sub(r"^$[^)]*$\s*", "", s)
+        return s.strip()
 
+    # ----------------------------
+    # Aggregate prompt + hard coercion
+    # ----------------------------
     def _build_aggregate_prompt(self, context_chunks: List[str], question: str) -> str:
         ctx = "\n\n".join(
             context_chunks) if context_chunks else "(no retrieved context)"
@@ -147,7 +171,8 @@ class RAGPipeline:
             "Task: Summarize the most common recurring issues.\n\n"
             "Rules:\n"
             "- Use ONLY the provided excerpts.\n"
-            "- Output ONLY bullets (3–7).\n"
+            "- Output MUST start with exactly: ISSUES:\n"
+            "- After that, output ONLY bullets (3–7).\n"
             "- Do NOT include bracketed markers like [1] or any IDs/scores/metadata.\n"
             "- Each bullet: 6–18 words, describing an ISSUE (not a quote).\n"
             f"- If insufficient, output exactly: {REFUSAL}\n\n"
@@ -164,7 +189,10 @@ class RAGPipeline:
 
         retry_prompt = (
             self._build_aggregate_prompt(context_chunks, question)
-            + "\n\nCRITICAL: Do not copy text; write issue summaries only. Never output '[' characters."
+            + "\n\nCRITICAL:\n"
+              "- Never output '[' or ']'.\n"
+              "- Never output complaint_id/doc_id/score/product.\n"
+              "- Do not copy-paste excerpt text; summarize issues.\n"
         )
         retry = (self.generator.generate(
             retry_prompt,
@@ -182,23 +210,33 @@ class RAGPipeline:
         if not lines:
             return False
 
-        if not all(ln.startswith(("-", "*", "•")) for ln in lines):
+        # Allow exact refusal
+        if len(lines) == 1 and lines[0] == REFUSAL:
+            return True
+
+        # Require header line
+        if lines[0] != "ISSUES:":
             return False
 
-        for ln in lines:
+        bullet_lines = lines[1:]
+        if not bullet_lines:
+            return False
+
+        if not all(ln.startswith(("-", "*", "•")) for ln in bullet_lines):
+            return False
+
+        for ln in bullet_lines:
             low = ln.lower()
 
-            # reject ANY bracket usage (even if truncated)
+            # reject ANY metadata leakage
             if "[" in ln or "]" in ln:
-                return False
-            if "(" in ln and "complaint" in low:
                 return False
             if any(m in low for m in ("complaint_id", "doc_id", "score=", "product=")):
                 return False
 
+            # Keep bullets short and non-boilerplate
             if len(ln.split()) > 24:
                 return False
-
             if low.startswith(("- i ", "- to whom", "- submitted", "- dear")):
                 return False
 
@@ -213,11 +251,12 @@ class RAGPipeline:
         )
 
         candidates: List[str] = []
-        for ch in context_chunks[:5]:
+        for ch in context_chunks[:8]:
             txt = (ch or "").strip()
             if not txt:
                 continue
 
+            # Split into simple sentence-ish fragments
             parts = [p.strip()
                      for p in re.split(r"[\.!\?\n]+", txt) if p.strip()]
             for p in parts[:2]:
@@ -226,31 +265,32 @@ class RAGPipeline:
                     continue
 
                 p = re.sub(r"\s+", " ", p)
-
                 words = p.split()
                 if len(words) < 6:
                     continue
 
                 p_short = " ".join(words[:16])
 
-                if any(x in p_short for x in ("[", "]", "complaint_id", "doc_id", "score=", "product=")):
+                if any(x in p_short.lower() for x in ("[", "]", "complaint_id", "doc_id", "score=", "product=")):
                     continue
 
                 candidates.append(p_short)
 
+        # dedupe
         out: List[str] = []
         for c in candidates:
             if c not in out:
                 out.append(c)
 
+        out = out[:7]
         if not out:
             return ""
 
-        out = out[:7]
-        return "\n".join(f"- {c}" for c in out)
+        bullets = "\n".join(f"- {c}" for c in out)
+        return f"ISSUES:\n{bullets}"
 
     # ----------------------------
-    # Context trimming (keyword-windowing)
+    # Context trimming (keyword-windowing) - your version kept
     # ----------------------------
     def _trim_text(self, question: str, text: str, max_chars: int = 900) -> str:
         t = (text or "").strip()
@@ -293,7 +333,7 @@ class RAGPipeline:
         return window[:max_chars].strip()
 
     # ----------------------------
-    # Yes/No guards (unchanged)
+    # Yes/No guards (your version, but FIX header strip inside evidence picker)
     # ----------------------------
     def _apply_yes_no_guards(self, question: str, model_text: str, context_chunks: List[str]) -> str:
         raw = (model_text or "").strip()
@@ -353,9 +393,6 @@ class RAGPipeline:
             return "I don't know"
         return None
 
-    # ----------------------------
-    # Evidence picking (fix broken header strip regex)
-    # ----------------------------
     def _pick_evidence_snippet(self, question: str, context_chunks: List[str]) -> str:
         if not context_chunks:
             return REFUSAL
@@ -385,8 +422,10 @@ class RAGPipeline:
         situation_markers.extend(domain_markers.get(domain or "", []))
 
         def strip_header(s: str) -> str:
-            # FIXED REGEX
-            return re.sub(r"^$\d+$(\s*$[^)]+$)?\s*", "", s).strip()
+            s = (s or "").strip()
+            s = re.sub(r"^$\d+$\s*", "", s)
+            s = re.sub(r"^$[^)]*$\s*", "", s)
+            return s.strip()
 
         def split_sentences(s: str) -> List[str]:
             s = strip_header(s)
@@ -463,7 +502,7 @@ class RAGPipeline:
         return " ".join(words[:18]).strip()
 
     # ----------------------------
-    # Keyword taxonomy + mention detection (unchanged)
+    # Keyword taxonomy + mention detection (your version)
     # ----------------------------
     def _domain_name_for_question(self, question: str) -> Optional[str]:
         q = (question or "").lower()
@@ -491,26 +530,17 @@ class RAGPipeline:
 
     def _domains(self) -> List[Tuple[str, List[str]]]:
         return [
-            ("discrimination", [
-                "discrimination", "discriminat", "rac", "bias", "fair lending", "protected class"
-            ]),
-            ("overdraft/fees", [
-                "overdraft", "fee", "fees", "nsf", "insufficient", "unexpected fee", "charged"
-            ]),
-            ("fraud/unauthorized", [
-                "fraud", "unauthorized", "chargeback", "stolen", "identity theft", "not authorized"
-            ]),
-            ("credit reporting", [
-                "credit report", "credit reporting", "experian", "equifax", "transunion",
-                "delinquent", "late payment"
-            ]),
-            ("posting delay", [
-                "posting", "posted", "delay", "pending", "misapplied", "applied to wrong",
-                "payment not posted"
-            ]),
-            ("close account", [
-                "close account", "closing account", "closed my account", "account closed",
-                "account being closed", "being closed", "account closure", "close my account",
-                "cancel", "cancelling", "cancellation", "terminate", "termination", "won't close"
-            ]),
+            ("discrimination", ["discrimination", "discriminat",
+             "rac", "bias", "fair lending", "protected class"]),
+            ("overdraft/fees", ["overdraft", "fee", "fees",
+             "nsf", "insufficient", "unexpected fee", "charged"]),
+            ("fraud/unauthorized", ["fraud", "unauthorized",
+             "chargeback", "stolen", "identity theft", "not authorized"]),
+            ("credit reporting", ["credit report", "credit reporting",
+             "experian", "equifax", "transunion", "delinquent", "late payment"]),
+            ("posting delay", ["posting", "posted", "delay", "pending",
+             "misapplied", "applied to wrong", "payment not posted"]),
+            ("close account", ["close account", "closing account", "closed my account", "account closed",
+                               "account being closed", "being closed", "account closure", "close my account",
+                               "cancel", "cancelling", "cancellation", "terminate", "termination", "won't close"]),
         ]
