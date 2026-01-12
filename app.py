@@ -1,276 +1,282 @@
-"""
-Task 4: Interactive Chat Interface (Gradio)
-- Question input box
-- Ask button
-- Answer display
-- Sources display (retrieved chunks used)
-- Clear button
-- Optional streaming
-"""
-
 from __future__ import annotations
 
+import os
 import time
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import asdict, is_dataclass
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import gradio as gr
 
-# ---- Import your pipeline (adjust these imports to match your repo) ----
-# Common possibilities:
-#   from rag_pipeline import RAGPipeline
-from src.rag_pipeline import RAGPipeline
-#
+from src.rag_pipeline import RAGPipeline, RAGResult
 
+import src.vector_store as vector_store_mod
+import src.retriever as retriever_mod
+import src.generator as generator_mod
 
-# ---------------------------- Config ----------------------------
 
 APP_TITLE = "Intelligent Complaint Analysis (RAG)"
 APP_SUBTITLE = "Ask questions about customer complaints and verify answers with sources."
 
-# If your pipeline needs paths/config, set them here.
-# Keep it simple for non-technical users.
+VSTORE_DIR = os.path.join(os.path.dirname(__file__), "vector_store")
+FAISS_INDEX_PATH = os.path.join(VSTORE_DIR, "index.faiss")
+METADATA_PATH = os.path.join(VSTORE_DIR, "metadata.pkl")
+
+# Gradio "messages format": [{"role": "...", "content": "..."}]
+ChatMessage = Dict[str, str]
+ChatHistory = List[ChatMessage]
+
 _PIPELINE: Dict[str, Optional[RAGPipeline]] = {"instance": None}
 
 
-@dataclass
-class SourceChunk:
-    """ A retrieved source chunk with metadata. """
-    rank: int
-    score: Optional[float]
-    text: str
-    meta: Dict[str, Any]
+class SourceChunk(dict):
+    """{"rank": int, "score": float|None, "text": str, "meta": dict}"""
+
+
+# ----------------------------
+# Builders
+# ----------------------------
+def _build_vector_store() -> Any:
+    if not (os.path.exists(FAISS_INDEX_PATH) and os.path.exists(METADATA_PATH)):
+        raise RuntimeError(
+            "Vector store files not found.\n"
+            f"Expected:\n- {FAISS_INDEX_PATH}\n- {METADATA_PATH}\n\n"
+            "Run ingestion & indexing first (or fix the output paths)."
+        )
+
+    # 1) module-level loader functions
+    for fn_name in ("load", "load_vector_store", "load_faiss_index", "load_index"):
+        if hasattr(vector_store_mod, fn_name) and callable(getattr(vector_store_mod, fn_name)):
+            fn = getattr(vector_store_mod, fn_name)
+            try:
+                return fn(VSTORE_DIR)
+            except TypeError:
+                return fn(index_path=FAISS_INDEX_PATH, metadata_path=METADATA_PATH)
+
+    # 2) class-based loader
+    for cls_name in ("VectorStore", "FaissVectorStore", "FAISSVectorStore"):
+        if hasattr(vector_store_mod, cls_name):
+            cls = getattr(vector_store_mod, cls_name)
+
+            if hasattr(cls, "load") and callable(getattr(cls, "load")):
+                try:
+                    return cls.load(VSTORE_DIR)
+                except TypeError:
+                    return cls.load(index_path=FAISS_INDEX_PATH, metadata_path=METADATA_PATH)
+
+            try:
+                return cls(index_path=FAISS_INDEX_PATH, metadata_path=METADATA_PATH)
+            except TypeError:
+                return cls(FAISS_INDEX_PATH, METADATA_PATH)
+
+    raise RuntimeError(
+        "Could not construct vector store from src/vector_store.py. "
+        "Please share src/vector_store.py so I can align the exact API."
+    )
+
+
+def _build_retriever(vstore: Any) -> Any:
+    Retriever = getattr(retriever_mod, "Retriever")
+
+    index = getattr(vstore, "index", None) or getattr(
+        vstore, "faiss_index", None)
+    metadata = (
+        getattr(vstore, "metadata", None)
+        or getattr(vstore, "metadatas", None)
+        or getattr(vstore, "docs", None)
+    )
+    embeddings = getattr(vstore, "embeddings", None) or getattr(
+        vstore, "vectors", None)
+
+    if metadata is None and hasattr(vstore, "store"):
+        store = getattr(vstore, "store")
+        metadata = getattr(store, "metadata", None) or getattr(
+            store, "metadatas", None)
+
+    return Retriever(index=index, metadata=metadata, embeddings=embeddings)
+
+
+def _build_generator() -> Any:
+    for fn_name in ("build_generator", "get_generator", "load_generator", "make_generator"):
+        if hasattr(generator_mod, fn_name) and callable(getattr(generator_mod, fn_name)):
+            return getattr(generator_mod, fn_name)()
+
+    # include your actual class name
+    for cls_name in ("AnswerGenerator", "Generator", "TextGenerator", "LLMGenerator", "HFGenerator"):
+        if hasattr(generator_mod, cls_name):
+            cls = getattr(generator_mod, cls_name)
+            return cls()
+
+    raise RuntimeError(
+        "Could not construct generator from src/generator.py. "
+        "Please share src/generator.py so I can align the exact API/constructor args."
+    )
 
 
 def _init_pipeline() -> RAGPipeline:
-    """
-    Initialize the RAG pipeline once.
-    Adjust this if your RAGPipeline constructor requires arguments.
-    """
     if _PIPELINE["instance"] is None:
-        # Try common constructor signatures to be robust across implementations.
-        try:
-            _PIPELINE["instance"] = RAGPipeline()
-        except TypeError:
-            try:
-                # Some implementations expect named parameters
-                _PIPELINE["instance"] = RAGPipeline(
-                    retriever=None, generator=None)  # type: ignore
-            except TypeError:
-                # Fallback to positional Nones if required
-                _PIPELINE["instance"] = RAGPipeline(None, None)  # type: ignore
-    return _PIPELINE["instance"]
+        vstore = _build_vector_store()
+        retriever = _build_retriever(vstore)
+        generator = _build_generator()
+
+        pipe = RAGPipeline(retriever=retriever, generator=generator, k=3)
+
+        if getattr(pipe, "retriever", None) is None:
+            raise RuntimeError(
+                "Pipeline retriever is None (failed to initialize).")
+        if getattr(pipe, "generator", None) is None:
+            raise RuntimeError(
+                "Pipeline generator is None (failed to initialize).")
+
+        _PIPELINE["instance"] = pipe
+
+    return cast(RAGPipeline, _PIPELINE["instance"])
+
+
+# ----------------------------
+# Result unwrapping + sources
+# ----------------------------
+def _normalize_raw_sources(raw_sources: Any) -> List[SourceChunk]:
+    if not raw_sources:
+        return []
+    if not isinstance(raw_sources, list):
+        raw_sources = [raw_sources]
+
+    out: List[SourceChunk] = []
+    for i, item in enumerate(raw_sources, start=1):
+        if isinstance(item, str):
+            out.append(SourceChunk(rank=i, score=None, text=item, meta={}))
+            continue
+        if isinstance(item, dict):
+            text = item.get("text") or item.get(
+                "chunk") or item.get("content") or ""
+            score = item.get("score")
+            meta = item.get("metadata") or item.get("meta")
+            if not isinstance(meta, dict):
+                meta = {k: v for k, v in item.items() if k not in (
+                    "text", "chunk", "content", "score")}
+            out.append(SourceChunk(rank=i, score=score,
+                       text=text, meta=meta or {}))
+            continue
+        out.append(SourceChunk(rank=i, score=None, text=str(item), meta={}))
+    return out
+
+
+def _extract_answer_and_sources(result: Any) -> Tuple[str, List[SourceChunk]]:
+    if isinstance(result, RAGResult) or (hasattr(result, "answer") and hasattr(result, "sources")):
+        answer = str(getattr(result, "answer", "") or "").strip()
+        raw_sources = getattr(result, "sources", []) or []
+        return answer, _normalize_raw_sources(raw_sources)
+
+    if is_dataclass(result) and not isinstance(result, type):
+        result = asdict(cast(Any, result))
+
+    if isinstance(result, dict):
+        answer = result.get("answer") or result.get(
+            "output") or result.get("response") or ""
+        raw_sources = result.get("sources") or result.get(
+            "contexts") or result.get("chunks") or []
+        return str(answer).strip(), _normalize_raw_sources(raw_sources)
+
+    if isinstance(result, (tuple, list)) and len(result) == 2:
+        return str(result[0]).strip(), _normalize_raw_sources(result[1])
+
+    return str(result).strip(), []
 
 
 def _format_sources(chunks: List[SourceChunk]) -> str:
-    """Readable sources block (non-technical, but transparent)."""
     if not chunks:
         return "No sources were retrieved for this question."
 
-    lines = []
+    lines: List[str] = []
     for ch in chunks:
-        meta_bits = []
-        if ch.meta:
-            # show only helpful, human-friendly metadata if present
-            for k in ["complaint_id", "product", "issue", "company", "date"]:
-                if k in ch.meta and ch.meta[k]:
-                    meta_bits.append(f"{k}: {ch.meta[k]}")
-        meta_str = (" | " + " • ".join(meta_bits)) if meta_bits else ""
-        score_str = f" (score: {ch.score:.4f})" if isinstance(
-            ch.score, (int, float)) else ""
+        rank = ch.get("rank", 0)
+        score = ch.get("score", None)
+        text = (ch.get("text", "") or "").strip()
+        meta = ch.get("meta", {}) or {}
 
-        lines.append(
-            f"### Source {ch.rank}{score_str}{meta_str}\n"
-            f"{ch.text.strip()}"
-        )
+        meta_bits: List[str] = []
+        if isinstance(meta, dict):
+            for k in ["complaint_id", "product", "issue", "company", "date", "doc_id", "index_id"]:
+                if meta.get(k) is not None and meta.get(k) != "":
+                    meta_bits.append(f"{k}: {meta.get(k)}")
+
+        meta_str = (" | " + " • ".join(meta_bits)) if meta_bits else ""
+        score_str = f" (score: {score:.4f})" if isinstance(
+            score, (int, float)) else ""
+        lines.append(f"### Source {rank}{score_str}{meta_str}\n{text}")
 
     return "\n\n".join(lines).strip()
 
 
-def _extract_sources_from_pipeline_result(result: Any) -> Tuple[str, List[SourceChunk]]:
-    """
-    Tries to normalize different possible return shapes from your pipeline.
-
-    We aim for:
-      answer: str
-      sources: list of SourceChunk(text, score, meta)
-    """
-    # Case A: pipeline returns dict: {"answer": "...", "contexts": [...]} etc.
-    if isinstance(result, dict):
-        answer = (
-            result.get("answer")
-            or result.get("output")
-            or result.get("response")
-            or ""
-        )
-
-        raw_sources = (
-            result.get("sources")
-            or result.get("contexts")
-            or result.get("chunks")
-            or result.get("retrieved_chunks")
-            or []
-        )
-
-        sources: List[SourceChunk] = []
-        for i, item in enumerate(raw_sources, start=1):
-            # item might be a string chunk
-            if isinstance(item, str):
-                sources.append(SourceChunk(
-                    rank=i, score=None, text=item, meta={}))
-                continue
-
-            # item might be dict with text/score/metadata
-            if isinstance(item, dict):
-                text = item.get("text") or item.get(
-                    "chunk") or item.get("content") or ""
-                score = item.get("score")
-                meta = item.get("metadata") or item.get("meta") or {}
-                sources.append(SourceChunk(
-                    rank=i, score=score, text=text, meta=meta))
-                continue
-
-            # fallback
-            sources.append(SourceChunk(
-                rank=i, score=None, text=str(item), meta={}))
-
-        return str(answer).strip(), sources
-
-    # Case B: pipeline returns tuple: (answer, sources)
-    if isinstance(result, (tuple, list)) and len(result) == 2:
-        answer = str(result[0]).strip()
-        raw_sources = result[1] or []
-        sources: List[SourceChunk] = []
-        for i, item in enumerate(raw_sources, start=1):
-            if isinstance(item, str):
-                sources.append(SourceChunk(
-                    rank=i, score=None, text=item, meta={}))
-            elif isinstance(item, dict):
-                text = item.get("text") or item.get(
-                    "chunk") or item.get("content") or ""
-                score = item.get("score")
-                meta = item.get("metadata") or item.get("meta") or {}
-                sources.append(SourceChunk(
-                    rank=i, score=score, text=text, meta=meta))
-            else:
-                sources.append(SourceChunk(
-                    rank=i, score=None, text=str(item), meta={}))
-        return answer, sources
-
-    # Case C: pipeline returns plain string
-    return str(result).strip(), []
+# ----------------------------
+# Helpers for messages-history
+# ----------------------------
+def _append_user(history: ChatHistory, content: str) -> ChatHistory:
+    return (history or []) + [{"role": "user", "content": content}]
 
 
-# ---------------------------- Core App Logic ----------------------------
+def _append_assistant(history: ChatHistory, content: str) -> ChatHistory:
+    return (history or []) + [{"role": "assistant", "content": content}]
 
-def ask(question: str, chat_history: List[Tuple[str, str]]) -> Tuple[List[Tuple[str, str]], str]:
-    """
-    Non-streaming ask: updates chat history and returns sources markdown.
-    """
+
+def _replace_last_assistant(history: ChatHistory, content: str) -> ChatHistory:
+    history = history or []
+    if history and history[-1].get("role") == "assistant":
+        history = history[:-1]
+    return history + [{"role": "assistant", "content": content}]
+
+
+# ----------------------------
+# Gradio actions (messages-history)
+# ----------------------------
+def ask_stream(question: str, history: ChatHistory):
     question = (question or "").strip()
+    history = history or []
+
     if not question:
-        return chat_history, ""
-
-    pipe = _init_pipeline()
-
-    # IMPORTANT: adjust this call to match your pipeline API.
-    # Common patterns:
-    #   result = pipe.run(question)
-    #   result = pipe.answer(question)
-    #   result = pipe(question)
-    #
-    # Use a helper to robustly call the pipeline without assuming it's callable.
-    result = _call_pipeline(pipe, question)
-
-    answer, sources = _extract_sources_from_pipeline_result(result)
-    chat_history = chat_history + [(question, answer)]
-    sources_md = _format_sources(sources)
-    return chat_history, sources_md
-
-
-def _call_pipeline(pipe, question):
-    """Call the pipeline using common method names without assuming the object is callable."""
-    for name in ("run", "answer", "ask", "generate", "predict"):
-        if hasattr(pipe, name):
-            attr = getattr(pipe, name)
-            if callable(attr):
-                return attr(question)
-    # fallback to __call__ if object itself is callable
-    if callable(pipe):
-        return pipe(question)
-    raise TypeError(
-        "Pipeline object has no callable method (expected run/answer/ask/generate/predict or __call__)"
-    )
-
-
-def ask_stream(question: str, chat_history: List[Tuple[str, str]]):
-    """
-    Streaming: yields intermediate chat updates + sources at the end.
-    - If your generator/pipeline supports streaming tokens, plug it in here.
-    - Otherwise we do a simple "typewriter" stream for UX.
-    """
-    question = (question or "").strip()
-    if not question:
-        yield chat_history, ""
+        yield history, "Please type a question.", history
         return
 
-    pipe = _init_pipeline()
+    # first add the user message + an empty assistant message (stream target)
+    h0 = _append_user(history, question)
+    h0 = _append_assistant(h0, "")
+    yield h0, "", h0
 
-    # --- Real streaming hook (optional) ---
-    # If your pipeline has something like pipe.stream(question) that yields tokens:
-    #   for token in pipe.stream(question): ...
-    #
-    # Otherwise: run once and typewriter the final answer.
-    if hasattr(pipe, "stream"):
-        partial = ""
-        for token in pipe.stream(question):  # type: ignore
-            partial += str(token)
-            # show partial answer in last assistant bubble
-            temp_history = chat_history + [(question, partial)]
-            yield temp_history, ""  # sources shown at end
-        # after streaming completes, attempt to fetch sources if available
-        # (some streaming APIs provide sources separately; adapt if you have it)
-        yield chat_history + [(question, partial)], ""
-        return
-
-    # Fallback: non-streaming run, then typewriter effect
-    result = _call_pipeline(pipe, question)
-
-    answer, sources = _extract_sources_from_pipeline_result(result)
+    try:
+        pipe = _init_pipeline()
+        result = pipe.answer(question)
+        answer, sources = _extract_answer_and_sources(result)
+    except Exception as e:
+        answer = f"Error while running the pipeline: {type(e).__name__}: {e}"
+        sources = []
 
     typed = ""
     for ch in answer:
         typed += ch
-        yield chat_history + [(question, typed)], ""
-        time.sleep(0.005)  # small delay for “token-like” feel
+        h_stream = _replace_last_assistant(h0, typed)
+        yield h_stream, "", h_stream
+        time.sleep(0.003)
 
-    sources_md = _format_sources(sources)
-    yield chat_history + [(question, answer)], sources_md
-
-
-def clear_all():
-    """Resets conversation + sources."""
-    return [], "", ""
+    h_final = _replace_last_assistant(h0, answer)
+    yield h_final, _format_sources(sources), h_final
 
 
-# ---------------------------- UI ----------------------------
+def clear_all() -> Tuple[ChatHistory, str, str, ChatHistory]:
+    return [], "Sources will appear here after you ask a question.", "", []
+
 
 with gr.Blocks(title=APP_TITLE) as demo:
     gr.Markdown(f"# {APP_TITLE}\n{APP_SUBTITLE}")
 
     with gr.Row():
         with gr.Column(scale=3):
-            chatbot = gr.Chatbot(
-                label="Conversation",
-                height=420,
-                show_copy_button=True,
-            )
+            chatbot = gr.Chatbot(label="Conversation", height=420)
+
             question_box = gr.Textbox(
                 label="Your question",
                 placeholder="Type your question about the complaints…",
                 lines=2,
             )
-
             with gr.Row():
                 ask_btn = gr.Button("Ask", variant="primary")
                 clear_btn = gr.Button("Clear", variant="secondary")
@@ -278,36 +284,27 @@ with gr.Blocks(title=APP_TITLE) as demo:
         with gr.Column(scale=2):
             gr.Markdown("## Sources (Retrieved Evidence)")
             sources_box = gr.Markdown(
-                value="Sources will appear here after you ask a question."
-            )
+                value="Sources will appear here after you ask a question.")
 
-    # hidden state: chat history
-    state = gr.State([])  # List[Tuple[user, assistant]]
+    state = gr.State([])  # ChatHistory (messages)
 
-    # Wire buttons
-    # Streaming recommended: button triggers generator that yields updates
-    ask_btn.click(
-        fn=ask_stream,  # change to ask (non-streaming) if you prefer
+    ask_evt = ask_btn.click(  # pylint: disable=no-member
+        fn=ask_stream,
         inputs=[question_box, state],
-        outputs=[chatbot, sources_box],
-    ).then(
-        fn=lambda: "",  # clear input box after submit
+        outputs=[chatbot, sources_box, state],
+    )
+
+    ask_evt.then(  # pylint: disable=no-member
+        fn=lambda: "",
         inputs=None,
         outputs=question_box,
     )
 
-    # Keep internal state synced from chatbot
-    chatbot.change(fn=lambda x: x, inputs=chatbot, outputs=state)
-
-    clear_btn.click(
+    clear_btn.click(  # pylint: disable=no-member
         fn=clear_all,
         inputs=None,
-        outputs=[chatbot, sources_box, question_box],
-    ).then(
-        fn=lambda: [],
-        inputs=None,
-        outputs=state,
+        outputs=[chatbot, sources_box, question_box, state],
     )
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch()  # pylint: disable=no-member
