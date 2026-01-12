@@ -9,7 +9,6 @@ import gradio as gr
 
 from src.rag_pipeline import RAGPipeline, RAGResult
 
-# These exist in your tree; we will use them via best-effort factories.
 import src.vector_store as vector_store_mod
 import src.retriever as retriever_mod
 import src.generator as generator_mod
@@ -18,12 +17,11 @@ import src.generator as generator_mod
 APP_TITLE = "Intelligent Complaint Analysis (RAG)"
 APP_SUBTITLE = "Ask questions about customer complaints and verify answers with sources."
 
-# Expected local vector store directory
 VSTORE_DIR = os.path.join(os.path.dirname(__file__), "vector_store")
 FAISS_INDEX_PATH = os.path.join(VSTORE_DIR, "index.faiss")
 METADATA_PATH = os.path.join(VSTORE_DIR, "metadata.pkl")
 
-# Older Gradio Chatbot expects: List[Tuple[user, assistant]]
+# Force "tuple history" mode everywhere
 ChatHistory = List[Tuple[str, str]]
 
 _PIPELINE: Dict[str, Optional[RAGPipeline]] = {"instance": None}
@@ -34,23 +32,14 @@ class SourceChunk(dict):
 
 
 # ----------------------------
-# Helpers: dynamic builders (robust across small API differences)
+# Builders
 # ----------------------------
 def _build_vector_store() -> Any:
-    """
-    Loads your FAISS vector store from ./vector_store.
-
-    This function tries common patterns:
-      - VectorStore.load(...)
-      - load_vector_store(...)
-      - load_faiss_index(...)
-      - VectorStore(index_path=..., metadata_path=...)
-    """
     if not (os.path.exists(FAISS_INDEX_PATH) and os.path.exists(METADATA_PATH)):
         raise RuntimeError(
             "Vector store files not found.\n"
             f"Expected:\n- {FAISS_INDEX_PATH}\n- {METADATA_PATH}\n\n"
-            "Run Task 2/3 ingestion & indexing first (or fix the output paths)."
+            "Run ingestion & indexing first (or fix the output paths)."
         )
 
     # 1) module-level loader functions
@@ -60,19 +49,19 @@ def _build_vector_store() -> Any:
             try:
                 return fn(VSTORE_DIR)
             except TypeError:
-                # some loaders want explicit paths
                 return fn(index_path=FAISS_INDEX_PATH, metadata_path=METADATA_PATH)
 
     # 2) class-based loader
     for cls_name in ("VectorStore", "FaissVectorStore", "FAISSVectorStore"):
         if hasattr(vector_store_mod, cls_name):
             cls = getattr(vector_store_mod, cls_name)
-            # try common constructors / classmethods
+
             if hasattr(cls, "load") and callable(getattr(cls, "load")):
                 try:
                     return cls.load(VSTORE_DIR)
                 except TypeError:
                     return cls.load(index_path=FAISS_INDEX_PATH, metadata_path=METADATA_PATH)
+
             try:
                 return cls(index_path=FAISS_INDEX_PATH, metadata_path=METADATA_PATH)
             except TypeError:
@@ -86,41 +75,30 @@ def _build_vector_store() -> Any:
 
 def _build_retriever(vstore: Any) -> Any:
     """
-    Builds a Retriever object that has .retrieve(query, k=...).
+    src/retriever.py expects index/metadata/embeddings.
+    We extract what we can from vstore.
     """
-    # If the vector store itself offers as_retriever()
-    if hasattr(vstore, "as_retriever") and callable(getattr(vstore, "as_retriever")):
-        return vstore.as_retriever()
+    Retriever = getattr(retriever_mod, "Retriever")
 
-    # Retriever class/function in src/retriever.py
-    for cls_name in ("Retriever", "VectorStoreRetriever", "FaissRetriever", "FAISSRetriever"):
-        if hasattr(retriever_mod, cls_name):
-            cls = getattr(retriever_mod, cls_name)
-            try:
-                return cls(vstore)
-            except TypeError:
-                # sometimes needs keyword
-                return cls(vector_store=vstore)
-
-    # module-level factory
-    for fn_name in ("build_retriever", "get_retriever", "make_retriever"):
-        if hasattr(retriever_mod, fn_name) and callable(getattr(retriever_mod, fn_name)):
-            fn = getattr(retriever_mod, fn_name)
-            return fn(vstore)
-
-    raise RuntimeError(
-        "Could not construct retriever from src/retriever.py. "
-        "Please share src/retriever.py so I can align the exact API."
+    index = getattr(vstore, "index", None) or getattr(
+        vstore, "faiss_index", None)
+    metadata = (
+        getattr(vstore, "metadata", None)
+        or getattr(vstore, "metadatas", None)
+        or getattr(vstore, "docs", None)
     )
+    embeddings = getattr(vstore, "embeddings", None) or getattr(
+        vstore, "vectors", None)
+
+    if metadata is None and hasattr(vstore, "store"):
+        store = getattr(vstore, "store")
+        metadata = getattr(store, "metadata", None) or getattr(
+            store, "metadatas", None)
+
+    return Retriever(index=index, metadata=metadata, embeddings=embeddings)
 
 
 def _build_generator() -> Any:
-    """
-    Builds your generator (LLM wrapper) from src/generator.py.
-    Must expose .generate(prompt, generate_kwargs=...) returning an object with .text
-    (per your rag_pipeline.py).
-    """
-    # Common patterns
     for fn_name in ("build_generator", "get_generator", "load_generator", "make_generator"):
         if hasattr(generator_mod, fn_name) and callable(getattr(generator_mod, fn_name)):
             return getattr(generator_mod, fn_name)()
@@ -128,11 +106,7 @@ def _build_generator() -> Any:
     for cls_name in ("Generator", "TextGenerator", "LLMGenerator", "HFGenerator"):
         if hasattr(generator_mod, cls_name):
             cls = getattr(generator_mod, cls_name)
-            try:
-                return cls()
-            except TypeError:
-                # if it needs args, we need the file to know what
-                break
+            return cls()
 
     raise RuntimeError(
         "Could not construct generator from src/generator.py. "
@@ -141,9 +115,6 @@ def _build_generator() -> Any:
 
 
 def _init_pipeline() -> RAGPipeline:
-    """
-    Proper pipeline init: loads vector store -> retriever, builds generator -> pipeline.
-    """
     if _PIPELINE["instance"] is None:
         vstore = _build_vector_store()
         retriever = _build_retriever(vstore)
@@ -151,7 +122,6 @@ def _init_pipeline() -> RAGPipeline:
 
         pipe = RAGPipeline(retriever=retriever, generator=generator, k=3)
 
-        # Defensive checks (clear error instead of NoneType crash)
         if getattr(pipe, "retriever", None) is None:
             raise RuntimeError(
                 "Pipeline retriever is None (failed to initialize).")
@@ -161,7 +131,7 @@ def _init_pipeline() -> RAGPipeline:
 
         _PIPELINE["instance"] = pipe
 
-    return _PIPELINE["instance"]
+    return cast(RAGPipeline, _PIPELINE["instance"])
 
 
 # ----------------------------
@@ -194,13 +164,11 @@ def _normalize_raw_sources(raw_sources: Any) -> List[SourceChunk]:
 
 
 def _extract_answer_and_sources(result: Any) -> Tuple[str, List[SourceChunk]]:
-    # Your RAGResult
     if isinstance(result, RAGResult) or (hasattr(result, "answer") and hasattr(result, "sources")):
         answer = str(getattr(result, "answer", "") or "").strip()
         raw_sources = getattr(result, "sources", []) or []
         return answer, _normalize_raw_sources(raw_sources)
 
-    # dataclass instance -> dict (Pylance-safe)
     if is_dataclass(result) and not isinstance(result, type):
         result = asdict(cast(Any, result))
 
@@ -237,26 +205,25 @@ def _format_sources(chunks: List[SourceChunk]) -> str:
         meta_str = (" | " + " • ".join(meta_bits)) if meta_bits else ""
         score_str = f" (score: {score:.4f})" if isinstance(
             score, (int, float)) else ""
-
         lines.append(f"### Source {rank}{score_str}{meta_str}\n{text}")
 
     return "\n\n".join(lines).strip()
 
 
 # ----------------------------
-# App actions (Gradio)
+# Gradio actions (tuple-history only)
 # ----------------------------
 def ask_stream(question: str, history: ChatHistory):
     question = (question or "").strip()
     history = history or []
 
+    # Always yield tuple-history
     if not question:
-        yield history, "", history
+        yield history, "Please type a question.", history
         return
 
     try:
         pipe = _init_pipeline()
-        # IMPORTANT: your pipeline uses .answer()
         result = pipe.answer(question)
         answer, sources = _extract_answer_and_sources(result)
     except Exception as e:
@@ -266,11 +233,11 @@ def ask_stream(question: str, history: ChatHistory):
     typed = ""
     for ch in answer:
         typed += ch
-        temp_history = history + [(question, typed)]
+        temp_history: ChatHistory = history + [(question, typed)]
         yield temp_history, "", temp_history
         time.sleep(0.003)
 
-    new_history = history + [(question, answer)]
+    new_history: ChatHistory = history + [(question, answer)]
     yield new_history, _format_sources(sources), new_history
 
 
@@ -283,7 +250,9 @@ with gr.Blocks(title=APP_TITLE) as demo:
 
     with gr.Row():
         with gr.Column(scale=3):
+            # IMPORTANT: tuple-history mode (do not set type="messages")
             chatbot = gr.Chatbot(label="Conversation", height=420)
+
             question_box = gr.Textbox(
                 label="Your question",
                 placeholder="Type your question about the complaints…",
@@ -305,6 +274,7 @@ with gr.Blocks(title=APP_TITLE) as demo:
         inputs=[question_box, state],
         outputs=[chatbot, sources_box, state],
     )
+
     ask_evt.then(  # pylint: disable=no-member
         fn=lambda: "",
         inputs=None,
