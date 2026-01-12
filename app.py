@@ -21,7 +21,7 @@ VSTORE_DIR = os.path.join(os.path.dirname(__file__), "vector_store")
 FAISS_INDEX_PATH = os.path.join(VSTORE_DIR, "index.faiss")
 METADATA_PATH = os.path.join(VSTORE_DIR, "metadata.pkl")
 
-# Force "tuple history" mode everywhere
+# Force "tuple history" mode everywhere (Gradio Chatbot classic format)
 ChatHistory = List[Tuple[str, str]]
 
 _PIPELINE: Dict[str, Optional[RAGPipeline]] = {"instance": None}
@@ -95,15 +95,24 @@ def _build_retriever(vstore: Any) -> Any:
         metadata = getattr(store, "metadata", None) or getattr(
             store, "metadatas", None)
 
+    # NOTE: keep keyword args here because your Retriever __init__ supports them.
     return Retriever(index=index, metadata=metadata, embeddings=embeddings)
 
 
 def _build_generator() -> Any:
+    # 1) module-level builder helpers
     for fn_name in ("build_generator", "get_generator", "load_generator", "make_generator"):
         if hasattr(generator_mod, fn_name) and callable(getattr(generator_mod, fn_name)):
             return getattr(generator_mod, fn_name)()
 
-    for cls_name in ("Generator", "TextGenerator", "LLMGenerator", "HFGenerator"):
+    # 2) class names (include your actual class: AnswerGenerator)
+    for cls_name in (
+        "AnswerGenerator",
+        "Generator",
+        "TextGenerator",
+        "LLMGenerator",
+        "HFGenerator",
+    ):
         if hasattr(generator_mod, cls_name):
             cls = getattr(generator_mod, cls_name)
             return cls()
@@ -198,7 +207,7 @@ def _format_sources(chunks: List[SourceChunk]) -> str:
 
         meta_bits: List[str] = []
         if isinstance(meta, dict):
-            for k in ["complaint_id", "product", "issue", "company", "date", "doc_id"]:
+            for k in ["complaint_id", "product", "issue", "company", "date", "doc_id", "index_id"]:
                 if meta.get(k) is not None and meta.get(k) != "":
                     meta_bits.append(f"{k}: {meta.get(k)}")
 
@@ -288,4 +297,4 @@ with gr.Blocks(title=APP_TITLE) as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch()  # pylint: disable=no-member
