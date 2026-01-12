@@ -1,5 +1,3 @@
-""" Gradio app for RAG-based intelligent complaint analysis.
-Allows users to ask questions about customer complaints and verifies answers with sources."""
 from __future__ import annotations
 
 import os
@@ -23,8 +21,9 @@ VSTORE_DIR = os.path.join(os.path.dirname(__file__), "vector_store")
 FAISS_INDEX_PATH = os.path.join(VSTORE_DIR, "index.faiss")
 METADATA_PATH = os.path.join(VSTORE_DIR, "metadata.pkl")
 
-# Force "tuple history" mode everywhere (Gradio Chatbot classic format)
-ChatHistory = List[Tuple[str, str]]
+# Gradio "messages format": [{"role": "...", "content": "..."}]
+ChatMessage = Dict[str, str]
+ChatHistory = List[ChatMessage]
 
 _PIPELINE: Dict[str, Optional[RAGPipeline]] = {"instance": None}
 
@@ -76,10 +75,6 @@ def _build_vector_store() -> Any:
 
 
 def _build_retriever(vstore: Any) -> Any:
-    """
-    src/retriever.py expects index/metadata/embeddings.
-    We extract what we can from vstore.
-    """
     Retriever = getattr(retriever_mod, "Retriever")
 
     index = getattr(vstore, "index", None) or getattr(
@@ -97,24 +92,16 @@ def _build_retriever(vstore: Any) -> Any:
         metadata = getattr(store, "metadata", None) or getattr(
             store, "metadatas", None)
 
-    # NOTE: keep keyword args here because your Retriever __init__ supports them.
     return Retriever(index=index, metadata=metadata, embeddings=embeddings)
 
 
 def _build_generator() -> Any:
-    # 1) module-level builder helpers
     for fn_name in ("build_generator", "get_generator", "load_generator", "make_generator"):
         if hasattr(generator_mod, fn_name) and callable(getattr(generator_mod, fn_name)):
             return getattr(generator_mod, fn_name)()
 
-    # 2) class names (include your actual class: AnswerGenerator)
-    for cls_name in (
-        "AnswerGenerator",
-        "Generator",
-        "TextGenerator",
-        "LLMGenerator",
-        "HFGenerator",
-    ):
+    # include your actual class name
+    for cls_name in ("AnswerGenerator", "Generator", "TextGenerator", "LLMGenerator", "HFGenerator"):
         if hasattr(generator_mod, cls_name):
             cls = getattr(generator_mod, cls_name)
             return cls()
@@ -222,17 +209,38 @@ def _format_sources(chunks: List[SourceChunk]) -> str:
 
 
 # ----------------------------
-# Gradio actions (tuple-history only)
+# Helpers for messages-history
+# ----------------------------
+def _append_user(history: ChatHistory, content: str) -> ChatHistory:
+    return (history or []) + [{"role": "user", "content": content}]
+
+
+def _append_assistant(history: ChatHistory, content: str) -> ChatHistory:
+    return (history or []) + [{"role": "assistant", "content": content}]
+
+
+def _replace_last_assistant(history: ChatHistory, content: str) -> ChatHistory:
+    history = history or []
+    if history and history[-1].get("role") == "assistant":
+        history = history[:-1]
+    return history + [{"role": "assistant", "content": content}]
+
+
+# ----------------------------
+# Gradio actions (messages-history)
 # ----------------------------
 def ask_stream(question: str, history: ChatHistory):
-    """Ask a question and stream the answer character by character."""
     question = (question or "").strip()
     history = history or []
 
-    # Always yield tuple-history
     if not question:
         yield history, "Please type a question.", history
         return
+
+    # first add the user message + an empty assistant message (stream target)
+    h0 = _append_user(history, question)
+    h0 = _append_assistant(h0, "")
+    yield h0, "", h0
 
     try:
         pipe = _init_pipeline()
@@ -245,16 +253,15 @@ def ask_stream(question: str, history: ChatHistory):
     typed = ""
     for ch in answer:
         typed += ch
-        temp_history: ChatHistory = history + [(question, typed)]
-        yield temp_history, "", temp_history
+        h_stream = _replace_last_assistant(h0, typed)
+        yield h_stream, "", h_stream
         time.sleep(0.003)
 
-    new_history: ChatHistory = history + [(question, answer)]
-    yield new_history, _format_sources(sources), new_history
+    h_final = _replace_last_assistant(h0, answer)
+    yield h_final, _format_sources(sources), h_final
 
 
 def clear_all() -> Tuple[ChatHistory, str, str, ChatHistory]:
-    """Clear the entire conversation and sources."""
     return [], "Sources will appear here after you ask a question.", "", []
 
 
@@ -263,7 +270,6 @@ with gr.Blocks(title=APP_TITLE) as demo:
 
     with gr.Row():
         with gr.Column(scale=3):
-            # IMPORTANT: tuple-history mode (do not set type="messages")
             chatbot = gr.Chatbot(label="Conversation", height=420)
 
             question_box = gr.Textbox(
@@ -280,7 +286,7 @@ with gr.Blocks(title=APP_TITLE) as demo:
             sources_box = gr.Markdown(
                 value="Sources will appear here after you ask a question.")
 
-    state = gr.State([])  # ChatHistory
+    state = gr.State([])  # ChatHistory (messages)
 
     ask_evt = ask_btn.click(  # pylint: disable=no-member
         fn=ask_stream,
